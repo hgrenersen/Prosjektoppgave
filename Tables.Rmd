@@ -1,0 +1,740 @@
+---
+title: "Creating Violin Figures"
+author: "Henrik Grenersen"
+date: "2024-11-27"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+setwd("C:\\Users\\47980\\OneDrive - NTNU\\Documents\\FYSMAT\\Femte\\Fall\\Prosjektoppgave\\Code")
+
+source("C:/Users/47980/OneDrive - NTNU/Documents/FYSMAT/Femte/Fall/Prosjektoppgave/Code/Scripts/12) Combining CV estimates and IWs.R")
+
+source("C:/Users/47980/OneDrive - NTNU/Documents/FYSMAT/Femte/Fall/Prosjektoppgave/Code/Scripts/17) CV simulations for all noisy data.R")
+
+source("Scripts\\Scoring Rules.R")
+
+library(ggplot2)
+
+library(kableExtra)
+```
+
+# Creating a function that loads data 
+
+```{r}
+loadData_from_cluster <- function(beta, method="LOOCV", nFolds = 0, prefix="Representative"){
+  # Function to load a single CV result from the cluster, stored
+  # in folder VsCode\\Data\\Beta=beta\\CV
+  prefix <- prefix <- paste0("..\\VsCode\\Data\\Beta=", beta, "\\CV\\")
+  if(method=="LOOCV"){
+    preds <- readRDS(paste0(prefix, "LOOCV\\Final Preds.rds"))
+    pred_var <- readRDS(paste0(prefix, "LOOCV\\Final Pred vars.rds"))
+    return(list(preds=preds, pred_var=pred_var))
+  }
+  if(method=="K"){
+    prefix <- paste0(prefix, nFolds, "-fold\\")
+    
+    preds <- readRDS(paste0(prefix, "Final Preds.rds"))
+    pred_var <- readRDS(paste0(prefix, "Final Pred vars.rds"))
+    foldIds <- readRDS(paste0(prefix, "Final Fold indices.rds"))
+    
+    return(list(preds=preds, pred_var=pred_var, foldIds=foldIds))
+  }
+  
+  if(method=="BLOCK"){
+    prefix <- paste0(prefix, nFolds, "-block\\")
+    
+    preds <- readRDS(paste0(prefix, "Final Preds.rds"))
+    pred_var <- readRDS(paste0(prefix, "Final Pred vars.rds"))
+    foldIds <- readRDS(paste0(prefix, "Final Fold indices.rds"))
+    
+    return(list(preds=preds, pred_var=pred_var, foldIds=foldIds))
+  }
+  
+}
+
+load_all_from_cluster <- function(beta){
+  # Loads all the CV results and stores them in a list
+  
+  res_list <- list()
+  
+  # Loading the datasets used
+  
+  prefix <-  paste0("..\\VsCode\\Data\\Beta=", beta, "\\Data\\")
+   
+  res_list$data <- readRDS(paste0(prefix, "Datasets.rds"))
+  
+  # CV methods
+  
+  res_list$LOOCV <- loadData_from_cluster(beta)
+  
+  res_list$fold_9 <- loadData_from_cluster(beta, "K", nFolds=9)
+  
+  res_list$fold_25 <- loadData_from_cluster(beta, "K", nFolds=25)
+  
+  res_list$block_9 <- loadData_from_cluster(beta, "BLOCK", nFolds=9)
+  
+  res_list$block_25 <- loadData_from_cluster(beta, "BLOCK", nFolds=25)
+  
+  # IWs
+  
+  prefix <-  paste0("..\\VsCode\\Data\\Beta=", beta, "\\IWs\\")
+  
+  res_list$KMM <- readRDS(paste0(prefix, "Tuned KMM IWs.rds"))
+  
+  res_list$KLIEP <- readRDS(paste0(prefix, "KLIEP IWs.rds"))
+  
+  # Note that the Voronoi weights were stored as areas, not
+  # weights, they will be normalized with the true weights
+  
+  res_list$Vor <- readRDS(paste0(prefix, "Voronoi IWs.rds"))
+  
+  prefix <- paste0("..\\VsCode\\Data\\Beta=", beta, "\\True\\")
+  
+  res_list$true_IWs <- readRDS(paste0(prefix, "Importance weights.rds"))
+  
+  for(k in 1:ncol(res_list$Vor)){
+    res_list$Vor[, k] <- res_list$Vor[, k]/mean(res_list$Vor[, k])
+    
+    res_list$true_IWs[, k] <- res_list$true_IWs[,k]/mean(res_list$true_IWs[, k])
+  }
+  
+  # The ECRPS
+  
+  res_list$ECRPS <- readRDS(paste0(prefix, "ECRPS.rds"))
+  
+  # Median KMM
+  prefix <-  paste0("..\\VsCode\\Data\\Beta=", beta, "\\IWs\\")
+  res_list$KMM_med <- readRDS(paste0(prefix, "Median KMM IWs.rds"))
+  
+  return(res_list)
+}
+
+lok <- load_all_from_cluster(0.5)
+
+plotId <- 1
+
+ggplot(lok$data[[plotId]], aes(x=x, y=y, color=lok$block_25$pred_var[, plotId]))+
+  geom_point()+
+  coord_equal()
+```
+
+The result from the above function is a list that for all CV methods contain predictions and prediction variances for a given beta. It also contains the data, the importance weights and also the ECRPS. 
+
+# Plotting function comparing IWs
+
+```{r}
+df  <- load_all_from_cluster(0)
+
+compare_IWs_violin <- function(res_list, beta=0){
+  
+  MSEs <- c(mean((res_list$true_IWs-res_list$KMM)^2),
+            mean((res_list$true_IWs-res_list$KMM_med)^2),
+            mean((res_list$true_IWs-res_list$KLIEP)^2),
+            mean((res_list$true_IWs-res_list$Vor)^2))
+  
+  maxes <- c(max(-(res_list$true_IWs-res_list$KMM)),
+            max(-(res_list$true_IWs-res_list$KMM_med)),
+            max(-(res_list$true_IWs-res_list$KLIEP)),
+            max(-(res_list$true_IWs-res_list$Vor)))
+
+  
+  annotations <- data.frame(
+  x = c("Tuned KMM", "Median KMM", "KLIEP", "Voronoi"),
+  mse = MSEs,
+  max = maxes
+)
+  
+  plot_df <- data.frame(KMM=c(res_list$KMM),
+                   KMM_med =c(res_list$KMM_med),
+                   KLIEP = c(res_list$KLIEP), 
+                   Vor = c(res_list$Vor),
+                   true_IWs = c(res_list$true_IWs))
+  
+  fig<- ggplot(plot_df)+
+    geom_violin(aes(x="Tuned KMM", y=KMM-true_IWs))+
+    geom_violin(aes(x="Median KMM", y=KMM_med-true_IWs))+
+    geom_violin(aes(x="KLIEP", y=KLIEP-true_IWs))+
+    geom_violin(aes(x="Voronoi", y=Vor-true_IWs))+
+    geom_text(data = annotations, aes(x = x, y = 10, label = paste0( formatC(mse, format = "e", digits = 2))), 
+            vjust = 0, size = 3)+
+    labs(x="", y="Bias for estimated IWs")+
+    #ggtitle(paste0("Estimated importance weights for beta=", beta))+
+    ylim(-20,20)
+  fig
+}
+```
+
+
+# Bootstrapping
+
+```{r}
+library(boot)
+boot_statistic <- function(og_data, bootstrap_indices, ECRPS_vals){
+  CV_estimates_boot <- og_data[bootstrap_indices]
+  ECRPS_boot <- ECRPS_vals[bootstrap_indices]
+  mean((CV_estimates_boot-ECRPS_boot)^2)
+}
+
+res_list <- load_all_from_cluster(0)
+
+CV_estimates <- aggregate_CV(res_list$block_9, Datasets = res_list$data)
+
+boot_obj <- boot(data=CV_estimates,
+                 statistic = boot_statistic,
+                 R= 10000,
+                 ECRPS_vals = res_list$ECRPS)
+
+plot(boot_obj)
+
+int <- boot.ci(boot_obj)
+
+int$normal
+```
+
+# Creating latex tables:
+
+## LOOCV
+```{r, asis=TRUE}
+betas <- c(0, 0.5, 1, 1.5, 2)
+
+IW_types <- c("None", "KMM", "KLIEP", "Voronoi", "TRUE")
+
+MSE_vals <- rep(0, length(betas)*length(IW_types))
+
+SE_vals <- rep(0, length(betas)*length(IW_types))
+
+set.seed(1)
+counter <- 1
+
+num_boot_samples <- 100000
+
+for(i in 1:length(betas)){
+  res_list <- load_all_from_cluster(betas[i])
+  
+  cv_vals <- res_list$LOOCV
+  
+  ECRPS_vals <- res_list$ECRPS
+  
+  aggregated_vals <- aggregate_CV(cv_vals, Datasets = res_list$data)
+  
+  MSE_vals[counter] <- mean((aggregated_vals-ECRPS_vals)^2)
+  
+  boot_obj <- boot(data=aggregated_vals,
+                 statistic = boot_statistic,
+                 R= num_boot_samples,
+                 ECRPS_vals = res_list$ECRPS)
+  
+  SE_vals[counter] <- sd(boot_obj$t)
+  
+  counter <- counter+1
+  
+  for(j in c(7:10, 12)){
+    # Positions:
+    # 7 - KMM
+    # 8 - KLIEP
+    # 9 - Vor
+    # 10 - True
+    # 11 - ECRPS
+    # 12 - KMM (median)
+    
+    if(j==9){
+      norm_IWs <- res_list[[j]]
+      for(k in 1:ncol(res_list[[j]])){
+        norm_IWs[, k] <- 1/norm_IWs[, k]
+        norm_IWs[, k] <- norm_IWs[, k]/mean(norm_IWs[, k])
+      }
+      aggregated_vals <- aggregate_CV(cv_vals, IW_type = "SMTH",
+                          IWs=norm_IWs, Datasets=res_list$data)  
+    }
+    
+    else if( j==10){ #Normalizing true weights and voronoi to have mean 1
+      norm_IWs <- res_list[[j]]
+      for(k in 1:ncol(res_list[[j]])){
+        norm_IWs[, k] <- norm_IWs[, k]/mean(norm_IWs[, k])
+      }
+      aggregated_vals <- aggregate_CV(cv_vals, IW_type = "SMTH",
+                          IWs=norm_IWs, Datasets=res_list$data)   
+    }
+    else{
+      aggregated_vals<-aggregate_CV(cv_vals, IW_type = "SMTH",
+                          IWs =res_list[[j]], Datasets=res_list$data)   
+    }
+    
+    MSE_vals[counter] <- mean((aggregated_vals-ECRPS_vals)^2)
+    
+    boot_obj <- boot(data=aggregated_vals,
+                 statistic = boot_statistic,
+                 R= num_boot_samples,
+                 ECRPS_vals = res_list$ECRPS)
+    
+    SE_vals[counter] <- sd(boot_obj$t)
+    
+    counter <- counter+1
+  }
+}
+
+formatted_MSE <- format(MSE_vals, scientific = TRUE, digits = 2)
+formatted_SE <- format(SE_vals, scientific = TRUE, digits = 2)
+
+# Create the data frame
+table_data <- data.frame(
+  `beta` = betas,
+  `No IWs` = paste0("mc{", formatted_MSE[seq(1, length(MSE_vals), by = 6)], 
+                    " (", formatted_SE[seq(1, length(SE_vals), by = 6)], ")}"),
+  KMM = paste0("mc{",formatted_MSE[seq(2, length(MSE_vals), by = 6)], 
+               " (", formatted_SE[seq(2, length(SE_vals), by = 6)], ")}"),
+  
+  KMM_med = paste0("mc{",formatted_MSE[seq(6, length(MSE_vals), by = 6)], 
+               " (", formatted_SE[seq(6, length(SE_vals), by = 6)], ")}"),
+  
+  KLIEP = paste0("mc{",formatted_MSE[seq(3, length(MSE_vals), by = 6)], 
+                 " (", formatted_SE[seq(3, length(SE_vals), by = 6)], ")}"),
+  Voronoi = paste0("mc{",formatted_MSE[seq(4, length(MSE_vals), by = 6)], 
+                   " (", formatted_SE[seq(4, length(SE_vals), by = 6)], ")}"),
+  `True IWs` = paste0("mc{",formatted_MSE[seq(5, length(MSE_vals), by = 6)], 
+                      " (", formatted_SE[seq(5, length(SE_vals), by = 6)], ")}")
+)
+
+# Generate LaTeX table
+table_latex <- kable(
+  table_data, 
+  format = "latex", 
+  caption = "MSE of the LOOCV estimator for different types of importance weights across different values for the LGCP parameter $\beta$. Text colored as \textcolor{mytextcolor}{this} denotes weighted LOOCV that attain the lowest MSE for a given $\beta$, while cells colored as \textcolor{mycellcolor}{this} denote combinations that give the lowest MSE across the different CV methods. Standard errors of the MSE estimates, obtained through bootstrapping, is given in the parantheses."
+)
+
+# Output LaTeX code
+cat(table_latex)
+```
+
+```{r}
+kable(table_data, format = "html", caption = "Efficacy of the LOOCV values estimator for different importance weights across different values for the LGCP parameter $\\beta$") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+
+## 9-fold
+```{r, asis=TRUE}
+betas <- c(0, 0.5, 1, 1.5, 2)
+
+IW_types <- IW_types <- c("None", "KMM", "KLIEP", "Voronoi", "TRUE",
+                          "BLOCK", "KMM - median")
+
+MSE_vals <- rep(0, length(betas)*length(IW_types))
+
+SE_vals <- rep(0, length(betas)*length(IW_types))
+
+counter <- 1
+set.seed(1)
+
+for(i in 1:length(betas)){
+  res_list <- load_all_from_cluster(betas[i])
+  
+  cv_vals <- res_list$fold_9
+  
+  ECRPS_vals <- res_list$ECRPS
+  
+  aggregated_vals <- aggregate_CV(cv_vals, Datasets = res_list$data,
+                                  method = "K", nFolds = 9)
+  
+  MSE_vals[counter] <- mean((aggregated_vals-ECRPS_vals)^2)
+  
+  boot_obj <- boot(data=aggregated_vals,
+                 statistic = boot_statistic,
+                 R= num_boot_samples,
+                 ECRPS_vals = res_list$ECRPS)
+  
+  SE_vals[counter] <- sd(boot_obj$t)
+  
+  counter <- counter+1
+  
+  for(j in 7:12){
+
+    
+    if(j==9){
+      norm_IWs <- res_list[[j]]
+      for(k in 1:ncol(res_list[[j]])){
+        norm_IWs[, k] <- 1/norm_IWs[, k]
+        norm_IWs[, k] <- norm_IWs[, k]/mean(norm_IWs[, k])
+      }
+      aggregated_vals <- aggregate_CV(cv_vals, IW_type = "SMTH",
+                          IWs=norm_IWs, Datasets=res_list$data)  
+    }
+    
+    else if( j==10){ #Normalizing true weights and voronoi to have mean 1
+      norm_IWs <- res_list[[j]]
+      for(k in 1:ncol(res_list[[j]])){
+        norm_IWs[, k] <- norm_IWs[, k]/mean(norm_IWs[, k])
+      }
+      aggregated_vals <- aggregate_CV(cv_vals, IW_type = "SMTH",
+                          IWs=norm_IWs, Datasets=res_list$data)   
+    }
+    else if(j==11){
+      aggregated_vals <- aggregate_CV(res_list$block_9, Datasets = res_list$data,
+                                  method = "BLOCK", numBlocks = 9)
+    }
+    else{
+      aggregated_vals<-aggregate_CV(cv_vals, IW_type = "SMTH",
+                          IWs =res_list[[j]], Datasets=res_list$data, 
+                          method = "K", nFolds = 9)   
+    }
+    
+    
+    MSE_vals[counter] <- mean((aggregated_vals-ECRPS_vals)^2)
+  
+    boot_obj <- boot(data=aggregated_vals,
+                 statistic = boot_statistic,
+                 R= num_boot_samples,
+                 ECRPS_vals = res_list$ECRPS)
+  
+    SE_vals[counter] <- sd(boot_obj$t)
+    
+    counter <- counter+1
+  }
+}
+
+formatted_MSE <- format(MSE_vals, scientific = TRUE, digits = 2)
+formatted_SE <- format(SE_vals, scientific = TRUE, digits = 2)
+
+# Create the data frame
+table_data <- data.frame(
+  `$beta$` = betas,
+  `No IWs` = paste0("mc{", formatted_MSE[seq(1, length(MSE_vals), by = length(IW_types))], 
+                    " (", formatted_SE[seq(1, length(SE_vals), by = length(IW_types))], ")}"),
+  KMM = paste0("mc{", formatted_MSE[seq(2, length(MSE_vals), by = length(IW_types))], 
+               " (", formatted_SE[seq(2, length(SE_vals), by = length(IW_types))], ")}"),
+  KMM_med = paste0("mc{", formatted_MSE[seq(7, length(MSE_vals), by = length(IW_types))], 
+               " (", formatted_SE[seq(7, length(SE_vals), by = length(IW_types))], ")}"),
+  KLIEP = paste0("mc{", formatted_MSE[seq(3, length(MSE_vals), by = length(IW_types))], 
+                 " (", formatted_SE[seq(3, length(SE_vals), by = length(IW_types))], ")}"),
+  Voronoi = paste0("mc{", formatted_MSE[seq(4, length(MSE_vals), by = length(IW_types))], 
+                   " (", formatted_SE[seq(4, length(SE_vals), by = length(IW_types))], ")}"),
+  `True IWs` = paste0("mc{", formatted_MSE[seq(5, length(MSE_vals), by = length(IW_types))], 
+                      " (", formatted_SE[seq(5, length(SE_vals), by = length(IW_types))], ")}"),
+  `Block` = paste0("mc{", formatted_MSE[seq(6, length(MSE_vals), by = length(IW_types))], 
+                      " (", formatted_SE[seq(6, length(SE_vals), by = length(IW_types))], ")}")
+)
+
+# Generate LaTeX table
+table_latex <- kable(
+  table_data, 
+  format = "latex", 
+  caption = "MSE of the 9-fold CV estimator for different types of importance weights across different values for the LGCP parameter $\beta$. Text colored as \textcolor{mytextcolor}{this} denotes weighted LOOCV that attain the lowest MSE for a given $\beta$, while cells colored as \textcolor{mycellcolor}{this} denote combinations that give the lowest MSE across the different CV methods. Standard errors of the MSE estimates, obtained through bootstrapping, is given in the parantheses."
+)
+
+# Output LaTeX code
+cat(table_latex)
+```
+
+```{r}
+# Generate LaTeX code using kable and kableExtra
+kable(table_data, format = "html", caption = "Efficacy of the 9-fold CV estimator for different importance weights across different values for the LGCP parameter $\\beta$") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+
+## 25-fold
+```{r, asis=TRUE}
+betas <- c(0, 0.5, 1, 1.5, 2)
+
+IW_types <- IW_types <- c("None", "KMM", "KLIEP", "Voronoi", "TRUE",
+                          "BLOCK", "KMM - median")
+
+MSE_vals <- rep(0, length(betas)*length(IW_types))
+
+SE_vals <- rep(0, length(betas)*length(IW_types))
+
+counter <- 1
+
+for(i in 1:length(betas)){
+  res_list <- load_all_from_cluster(betas[i])
+  
+  cv_vals <- res_list$fold_25
+  
+  ECRPS_vals <- res_list$ECRPS
+  
+  aggregated_vals <- aggregate_CV(cv_vals, Datasets = res_list$data,
+                                  method = "K", nFolds = 25)
+  
+  MSE_vals[counter] <- mean((aggregated_vals-ECRPS_vals)^2)
+  
+  boot_obj <- boot(data=aggregated_vals,
+                 statistic = boot_statistic,
+                 R= num_boot_samples,
+                 ECRPS_vals = res_list$ECRPS)
+  
+  SE_vals[counter] <- sd(boot_obj$t)
+  
+  counter <- counter+1
+  
+  for(j in 7:12){
+    
+    if(j==9){
+      norm_IWs <- res_list[[j]]
+      for(k in 1:ncol(res_list[[j]])){
+        norm_IWs[, k] <- 1/norm_IWs[, k]
+        norm_IWs[, k] <- norm_IWs[, k]/mean(norm_IWs[, k])
+      }
+      aggregated_vals <- aggregate_CV(cv_vals, IW_type = "SMTH",
+                          IWs=norm_IWs, Datasets=res_list$data)  
+    }
+    
+    else if( j==10){ #Normalizing true weights and voronoi to have mean 1
+      norm_IWs <- res_list[[j]]
+      for(k in 1:ncol(res_list[[j]])){
+        norm_IWs[, k] <- norm_IWs[, k]/mean(norm_IWs[, k])
+      }
+      aggregated_vals <- aggregate_CV(cv_vals, IW_type = "SMTH",
+                          IWs=norm_IWs, Datasets=res_list$data)   
+    }
+    else if(j==11){
+      aggregated_vals <- aggregate_CV(res_list$block_25, Datasets = res_list$data,
+                                  method = "BLOCK", numBlocks = 25)
+    }
+    else{
+      aggregated_vals<-aggregate_CV(cv_vals, IW_type = "SMTH",
+                          IWs =res_list[[j]], Datasets=res_list$data, 
+                          method = "K", nFolds = 25)   
+    }
+    
+    
+    MSE_vals[counter] <- mean((aggregated_vals-ECRPS_vals)^2)
+  
+    boot_obj <- boot(data=aggregated_vals,
+                 statistic = boot_statistic,
+                 R= num_boot_samples,
+                 ECRPS_vals = res_list$ECRPS)
+  
+    SE_vals[counter] <- sd(boot_obj$t)
+    
+    counter <- counter+1
+  }
+}
+
+formatted_MSE <- format(MSE_vals, scientific = TRUE, digits = 2)
+formatted_SE <- format(SE_vals, scientific = TRUE, digits = 2)
+
+# Create the data frame
+table_data <- data.frame(
+  `$beta$` = betas,
+  `No IWs` = paste0("mc{", formatted_MSE[seq(1, length(MSE_vals), by = length(IW_types))], 
+                    " (", formatted_SE[seq(1, length(SE_vals), by = length(IW_types))], ")}"),
+  KMM = paste0("mc{", formatted_MSE[seq(2, length(MSE_vals), by = length(IW_types))], 
+               " (", formatted_SE[seq(2, length(SE_vals), by = length(IW_types))], ")}"),
+  KMM_med = paste0("mc{", formatted_MSE[seq(7, length(MSE_vals), by = length(IW_types))], 
+               " (", formatted_SE[seq(7, length(SE_vals), by = length(IW_types))], ")}"),
+  KLIEP = paste0("mc{", formatted_MSE[seq(3, length(MSE_vals), by = length(IW_types))], 
+                 " (", formatted_SE[seq(3, length(SE_vals), by = length(IW_types))], ")}"),
+  Voronoi = paste0("mc{", formatted_MSE[seq(4, length(MSE_vals), by = length(IW_types))], 
+                   " (", formatted_SE[seq(4, length(SE_vals), by = length(IW_types))], ")}"),
+  `True IWs` = paste0("mc{", formatted_MSE[seq(5, length(MSE_vals), by = length(IW_types))], 
+                      " (", formatted_SE[seq(5, length(SE_vals), by = length(IW_types))], ")}"),
+  `Block` = paste0("mc{", formatted_MSE[seq(6, length(MSE_vals), by = length(IW_types))], 
+                      " (", formatted_SE[seq(6, length(SE_vals), by = length(IW_types))], ")}")
+)
+
+# Generate LaTeX table
+table_latex <- kable(
+  table_data, 
+  format = "latex", 
+  caption = "MSE of the 25-fold CV estimator for different types of importance weights across different values for the LGCP parameter $\beta$. Text colored as \textcolor{mytextcolor}{this} denotes weighted LOOCV that attain the lowest MSE for a given $\beta$, while cells colored as \textcolor{mycellcolor}{this} denote combinations that give the lowest MSE across the different CV methods. Standard errors of the MSE estimates, obtained through bootstrapping, is given in the parantheses."
+)
+
+# Output LaTeX code
+cat(table_latex)
+```
+```{r}
+kable(table_data, format = "html", caption = "Efficacy of the 25-fold CV estimator for different importance weights across different values for the LGCP parameter $\\beta$") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+
+# Delaunay Tessellation Figures
+
+```{r}
+calc_Voronoi_IWs <- function(data){
+  dir <- deldir(data$x, data$y, rw=c(0,1,0,1))
+
+  tiles <- tile.list(dir)
+  areas <- rep(1, 2000)
+  for(i in 1:2000){
+    areas[i] <- tiles[[i]]$area
+  }
+  
+  IWs <- areas/mean(areas)
+  
+  return(IWs)
+}
+
+crop_and_save <- function(figure, path, width=15, height=15){
+  ggsave(path, plot=figure, units="cm", width=width, height=height)
+  
+  pdf_img <- image_read_pdf(path)
+
+  # Trim whitespace from the edges
+  cropped_pdf <- image_trim(pdf_img)
+  
+  # Save the cropped PDF
+  image_write(cropped_pdf, path, format = "pdf")
+}
+
+library(ggforce)
+library(deldir)
+library(magick)
+
+res_list <- load_all_from_cluster(0)
+
+fig1 <- ggplot(res_list$data[[1]], aes(x=x, y=y))+
+  coord_equal()+
+  geom_voronoi_tile(aes(fill=log10(res_list$Vor[,1])), bound=c(0,1,0,1))+
+  geom_voronoi_segment(bound=c(0,1,0,1),linewidth=0.001)+
+  geom_point(size=0.1)+
+  labs(x="", y="", fill="Voronoi IW")+
+  scale_fill_gradient2(low="blue", high="red", mid="white",
+                       breaks = c(-1, -0.5, 0, 0.5), # Breaks on the log scale
+    #labels = c(0.1, 1, 3.16))+
+    labels = c(expression(10^-1), expression(10^-0.5),
+               1, expression(10^0.5)))+
+  theme_dark()
+
+crop_and_save(fig1, "Figures\\Voronoi IWs representative.pdf")
+
+res_list <- load_all_from_cluster(2)
+
+fig2 <- ggplot(res_list$data[[1]], aes(x=x, y=y))+
+  coord_equal()+
+  geom_voronoi_tile(aes(fill=log10(res_list$Vor[,1])), bound=c(0,1,0,1))+
+  geom_voronoi_segment(bound=c(0,1,0,1), linewidth=0.001)+
+  scale_fill_gradient2(low="blue", high="red", mid="white",
+                       breaks = c(-2, -1, 0, 1), # Breaks on the log scale
+    labels = c(expression(10^-2), expression(10^-1), expression(1), expression(10)))+
+  geom_point(size=0.01)+
+  labs(x="", y="", fill="Voronoi IW")+
+  theme_dark()
+
+crop_and_save(fig2, "Figures\\Voronoi IWs non-representative.pdf")
+```
+
+# KMM and KLIEP IWs
+
+```{r}
+res_list <- load_all_from_cluster(2)
+
+fig3 <- ggplot(res_list$data[[1]], aes(x=x, y=y))+
+  coord_equal()+
+  geom_point(aes(color=log10(res_list$KMM[,1])))+
+  labs(x="", y="", color="KMM IWs")+
+   scale_color_gradient2(
+    low = "blue", high = "red", mid = "white",
+    breaks = c( 0, 1), # Breaks on the log scale
+    labels = c( 1, 10))+
+  theme_dark()
+
+crop_and_save(fig3, "Figures\\KMM IWs non-rep.pdf")
+
+fig4 <- ggplot(res_list$data[[1]], aes(x=x, y=y))+
+  coord_equal()+
+  geom_point(aes(color=log10(res_list$KLIEP[,1])))+
+  labs(x="", y="", color="KLIEP IWs")+
+  scale_color_gradient2(low="blue", high="red", mid="white",
+                        breaks = c(-0.5, 0, 0.5, 1), # Breaks on the log scale
+    labels = c(TeX("$10^{-0.5}$"), 1, expression(10^0.5), 10))+
+  theme_dark()
+crop_and_save(fig4, "Figures\\KLIEP IWs non-rep.pdf")
+```
+
+# Comparison of IWs' bias
+
+```{r}
+res_list <- load_all_from_cluster(0)
+
+fig5 <- compare_IWs_violin(res_list)
+
+crop_and_save(fig5, "Figures\\Representative IWs Bias.pdf")
+
+res_list <- load_all_from_cluster(2)
+
+fig6 <- compare_IWs_violin(res_list, 2)
+
+crop_and_save(fig6, "Figures\\Non-Representative IWs Bias.pdf")
+```
+
+# Distribution of weights
+
+```{r, eval=FALSE}
+betas <- c(0, 0.5, 1, 1.5, 2)
+
+lower_weights <- matrix(rep(0, 5*5), ncol=5, nrow=5)
+colnames(lower_weights) <- c("KMM - tuned", "KLIEP", "Voronoi", "True", "KMM - median")
+
+upper_weights <- matrix(rep(0, 5*5), ncol=5, nrow=5)
+
+colnames(upper_weights) <- colnames(lower_weights)
+
+for(i in 1:5){
+  counter <- 1
+  
+  res_list <- load_all_from_cluster(betas[i])
+  
+  for(j in c(7:10, 12)){
+    
+    lower_weights[i, counter] <- min(c(res_list[[j]]))
+      
+    upper_weights[i, counter] <- max(c(res_list[[j]]))
+    
+    
+    counter <- counter + 1
+  }
+}
+
+plot_df <- data.frame(beta=betas)
+lower_weights <- data.frame(lower_weights)
+upper_weights <- data.frame(upper_weights)
+
+bound_fig <- ggplot(data = plot_df, aes(x = betas)) +
+  geom_segment( 
+               aes(x = betas-0.1,
+                   xend = betas-0.1,
+                   y = lower_weights$KMM...tuned,
+                   yend=upper_weights$KMM...tuned,
+                   color="KMM - tuned"))+
+ geom_segment( 
+               aes(x = betas-0.05,
+                   xend = betas-0.05,
+                   y = lower_weights$KMM...median,
+                   yend=upper_weights$KMM...median,
+                   color="KMM - median"))+
+  geom_segment( 
+               aes(x = betas+0.05,
+                   xend = betas+0.05,
+                   y = lower_weights$KLIEP,
+                   yend=upper_weights$KLIEP,
+                   color="KLIEP"))+
+  geom_segment( 
+               aes(x = betas+0.1,
+                   xend = betas+0.1,
+                   y = lower_weights$Voronoi,
+                   yend=upper_weights$Voronoi,
+                   color="Voronoi"))+
+  geom_segment( 
+               aes(x = betas,
+                   xend = betas,
+                   y = lower_weights$True,
+                   yend=upper_weights$True,
+                   color="True"))+
+  geom_point(aes(x=0, y=1, color="True"))+
+  
+  scale_y_continuous(trans='log10')+
+  labs(x="Beta", y="Range of importance weights", colour="IW type")
+
+crop_and_save(bound_fig, "Figures\\Range of IWs.pdf",width=20, height=10 )
+
+crop_and_save(compare_IWs_violin(load_all_from_cluster(0), 0), "Figures\\Representative Bias of IWs.pdf",width=20, height=10)
+
+crop_and_save(compare_IWs_violin(load_all_from_cluster(1), 1), "Figures\\Beta=1 Bias of IWs.pdf",width=20, height=10)
+
+crop_and_save(compare_IWs_violin(load_all_from_cluster(2), 2), "Figures\\Non-Representative Bias of IWs.pdf",width=20, height=10)
+```
+
+
+
